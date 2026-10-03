@@ -1,4 +1,4 @@
-"""Bounded spreadsheet reads, explicit mapping and portable Excel workbooks."""
+"""Spreadsheet reads, explicit mapping and portable Excel workbooks. Limits apply only in a public demo (limits.py)."""
 from copy import deepcopy
 import csv
 from datetime import date, datetime
@@ -6,6 +6,7 @@ from io import BytesIO, StringIO
 import math
 from pathlib import Path
 import re
+import sys
 from zipfile import BadZipFile, ZipFile
 
 from openpyxl import Workbook, load_workbook
@@ -13,21 +14,11 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 import pandas as pd
 
-from . import input_format as fmt, portable as io
+from . import input_format as fmt, limits, portable as io
 
 MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-# File size follows the 50 MB upload cap in .streamlit/config.toml and the launchers.
-MAX_BYTES = io.MAX_BYTES
-# Method limits, not file-size limits. The exact model holds at most 30 scenarios, 12 options, 360 payoffs and
-# 12 studies with up to 10 results (3,600 likelihood rows), so no decision table needs more rows than this. They stop
-# a large unrelated workbook from tying up the session; MAX_UNPACKED guards against compressed-archive bombs.
-MAX_ROWS = 10_000
-MAX_COLUMNS = 80
-MAX_SHEETS = 30
-MAX_CELLS = 250_000
-MAX_UNPACKED = 200 * 1024 * 1024
-TOO_LONG = ("keep at most {rows:,} rows and {columns} columns. Learn Signal's exact model holds at most 30 scenarios, "
-            "12 options and 3,600 study-result rows, so remove rows and sheets that are not part of the decision table.")
+# Long notes are allowed: lift the csv module's 128 KB field limit (the largest value a C long holds everywhere).
+csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 COMMON_LABELS = {"id": "Reference", "name": "Name", "source_id": "Source reference", "note": "Notes", "url": "Source URL", "title": "Source title"}
 
 
@@ -61,8 +52,8 @@ def _frame(rows, title):
         raise io.DataProblem(f"{title}: put a name in every used column of the first row.")
     if len(set(map(normalize, header))) != len(header):
         raise io.DataProblem(f"{title}: column names must be distinct. Rename the duplicate headings.")
-    if len(rows)-1 > MAX_ROWS or len(header) > MAX_COLUMNS:
-        raise io.DataProblem(f"{title}: " + TOO_LONG.format(rows=MAX_ROWS, columns=MAX_COLUMNS))
+    limits.check("rows", len(rows)-1, f"{title} has too many rows")
+    limits.check("columns", len(header), f"{title} has too many columns")
     data = []
     for index, row in enumerate(rows[1:], 2):
         if any(v not in (None, "") for v in row[len(header):]):
@@ -75,8 +66,17 @@ def _frame(rows, title):
 
 def load_tables(files):
     """files is [(filename, bytes)]; no file contents enter a shared cache."""
-    if not files or sum(len(raw) for _, raw in files) > MAX_BYTES:
-        raise io.DataProblem(f"Choose Excel (.xlsx) or UTF-8 CSV files totalling no more than {MAX_BYTES // 2**20} MB.")
+    if not files:
+        raise io.DataProblem("Choose Excel (.xlsx) or UTF-8 CSV files.")
+    limits.check("upload_bytes", sum(len(raw) for _, raw in files), "The selected files are too large")
+    try:
+        return _load_tables(files)
+    except MemoryError as exc:
+        raise io.DataProblem(limits.MEMORY) from exc
+
+
+def _load_tables(files):
+    max_rows, max_columns = limits.cap("rows"), limits.cap("columns")
     tables = {}
     cell_count = 0
     for filename, raw in files:
@@ -92,29 +92,27 @@ def load_tables(files):
                 reader = csv.reader(StringIO(text), dialect, strict=True)
                 rows = []
                 for row in reader:
-                    if len(rows) > MAX_ROWS or len(row) > MAX_COLUMNS:
-                        raise io.DataProblem(f"{filename}: " + TOO_LONG.format(rows=MAX_ROWS, columns=MAX_COLUMNS))
+                    if max_rows is not None and (len(rows) > max_rows or len(row) > max_columns):
+                        limits.check("rows", len(rows), f"{filename} has too many rows")
+                        limits.check("columns", len(row), f"{filename} has too many columns")
                     rows.append(row)
                 parsed[Path(filename).stem] = _frame(rows, filename)
             elif suffix == ".xlsx":
                 with ZipFile(BytesIO(raw)) as archive:
-                    if sum(f.file_size for f in archive.infolist()) > MAX_UNPACKED or len(archive.infolist()) > 1000:
-                        raise io.DataProblem(f"This workbook unpacks to more than {MAX_UNPACKED // 2**20} MB. "
-                                             "Keep only the sheets and rows of the decision table.")
+                    limits.check("unpacked_bytes", sum(f.file_size for f in archive.infolist()), f"{filename} unpacks to too much data")
+                    limits.check("archive_members", len(archive.infolist()), f"{filename} contains too many internal files")
                 formulas = load_workbook(BytesIO(raw), read_only=True, data_only=False, keep_links=False)
                 cached = None
                 try:
-                    if len(formulas.worksheets) > MAX_SHEETS:
-                        raise io.DataProblem(f"Keep at most {MAX_SHEETS} sheets in the workbook.")
+                    limits.check("sheets", len(formulas.worksheets), f"{filename} has too many sheets")
                     cached = load_workbook(BytesIO(raw), read_only=True, data_only=True, keep_links=False)
                     for sheet in formulas.worksheets:
-                        if sheet.max_row and sheet.max_row > MAX_ROWS + 1 or sheet.max_column and sheet.max_column > MAX_COLUMNS:
-                            raise io.DataProblem(f"{sheet.title} (including formatted empty cells): "
-                                                 + TOO_LONG.format(rows=MAX_ROWS, columns=MAX_COLUMNS))
+                        limits.check("rows", (sheet.max_row or 1) - 1, f"{sheet.title} (including formatted empty cells) has too many rows")
+                        limits.check("columns", sheet.max_column or 0, f"{sheet.title} (including formatted empty cells) has too many columns")
                         rows = []
                         for row, saved in zip(sheet.iter_rows(), cached[sheet.title].iter_rows()):
-                            if len(rows) > MAX_ROWS:
-                                raise io.DataProblem(f"{sheet.title}: " + TOO_LONG.format(rows=MAX_ROWS, columns=MAX_COLUMNS))
+                            if max_rows is not None and len(rows) > max_rows:
+                                limits.check("rows", len(rows), f"{sheet.title} has too many rows")
                             values = []
                             for cell, value in zip(row, saved):
                                 if cell.data_type == "f":
@@ -141,9 +139,7 @@ def load_tables(files):
             if frame is None or normalize(name) in {"readme", "instructions"}:
                 continue
             cell_count += (len(frame)+1) * len(frame.columns)
-            if cell_count > MAX_CELLS:
-                raise io.DataProblem(f"The combined files contain more than {MAX_CELLS:,} cells. Learn Signal's decision "
-                                     "tables are much smaller: remove unused sheets and columns.")
+            limits.check("cells", cell_count, "The combined files contain too many cells")
             title = name if name not in tables else f"{Path(filename).stem} / {name}"
             if title in tables:
                 raise io.DataProblem("Two files have the same sheet names. Rename a file or sheet to distinguish them.")

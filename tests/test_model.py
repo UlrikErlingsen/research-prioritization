@@ -170,3 +170,68 @@ def test_textbook_oil_drilling_example_evpi_and_evsi():
     post = r["posteriors"].set_index(["result", "state"]).posterior_probability
     assert post[("favourable", "Oil")] == pytest.approx(.5)
     assert post[("unfavourable", "Oil")] == pytest.approx(1 / 7)
+
+
+def large_model(states, actions, studies, results, seed=7):
+    """A valid random model of any size; the first study is perfectly accurate (it reveals the state's result group)."""
+    rng = np.random.default_rng(seed)
+    d = m.starter("Large generated decision")
+    prior = rng.dirichlet(np.ones(states))
+    prior[-1] = 1 - prior[:-1].sum()
+    d["states"] = [{"id": f"S{i}", "label": f"State {i}", "probability": float(p), "note": "", "source_id": None}
+                   for i, p in enumerate(prior)]
+    d["actions"] = [{"id": f"A{j}", "label": f"Action {j}"} for j in range(actions)]
+    d["payoffs"] = [{"action_id": a["id"], "state_id": s["id"], "value": float(rng.normal(0, 100)), "note": "",
+                     "source_id": None} for a in d["actions"] for s in d["states"]]
+    d["studies"] = [{"id": f"T{t}", "label": f"Study {t}", "cost": 1.0, "description": "Generated", "source_id": None}
+                    for t in range(studies)]
+    for t in range(studies):
+        for i, s in enumerate(d["states"]):
+            if t == 0:
+                probs = np.eye(results)[i % results]
+            else:
+                probs = rng.dirichlet(np.ones(results))
+                probs[-1] = 1 - probs[:-1].sum()
+            d["signals"] += [{"study_id": f"T{t}", "state_id": s["id"], "outcome": f"r{y}", "probability": float(p)}
+                             for y, p in enumerate(probs)]
+    return d
+
+
+def test_local_mode_accepts_models_beyond_the_demo_caps(monkeypatch):
+    from learnsignal import limits
+
+    monkeypatch.delenv("SIGNAL_PUBLIC", raising=False)
+    d = large_model(states=40, actions=15, studies=14, results=12)
+    assert len(d["states"]) > limits.DEMO["states"] and len(d["actions"]) > limits.DEMO["actions"]
+    assert len(d["signals"]) > limits.DEMO["signals"]
+    r = m.analyze(m.validate(d))
+    assert len(r["studies"]) == 14
+    assert (r["studies"].evsi >= -1e-8).all() and (r["studies"].evsi <= r["evpi"] + 1e-8).all()
+    assert np.allclose(r["posteriors"].groupby(["study", "result"]).posterior_probability.sum().dropna(), 1)
+    assert len(m.sensitivity(d, "S0")) == 41
+
+
+def test_public_demo_caps_model_size(monkeypatch):
+    monkeypatch.setenv("SIGNAL_PUBLIC", "1")
+    d = large_model(states=40, actions=3, studies=1, results=2)
+    with pytest.raises(io.DataProblem, match="public demo"):
+        m.validate(d)
+    d = large_model(states=4, actions=3, studies=1, results=11)
+    with pytest.raises(io.DataProblem, match="too many possible results.*public demo"):
+        m.validate(d)
+    assert m.analyze(m.demo()["data"])["evpi"] == pytest.approx(36000)
+
+
+def test_a_thousand_states_is_exact_and_fast():
+    """Calculations scale with options x states x results, not combinatorially."""
+    import time
+
+    d = large_model(states=1_000, actions=20, studies=5, results=4, seed=11)
+    started = time.perf_counter()
+    r = m.analyze(d)
+    assert time.perf_counter() - started < 60
+    prior = np.array([s["probability"] for s in d["states"]])
+    pay = {(p["action_id"], p["state_id"]): p["value"] for p in d["payoffs"]}
+    u = np.array([[pay[(a["id"], s["id"])] for s in d["states"]] for a in d["actions"]])
+    assert r["evpi"] == pytest.approx(float(u.max(axis=0) @ prior - (u @ prior).max()))
+    assert (r["studies"].evsi <= r["evpi"] + 1e-6).all()

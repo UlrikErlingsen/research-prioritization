@@ -14,9 +14,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 import pandas as pd
 from jsonschema import Draft202012Validator, FormatChecker
 
-
-# Byte limit for any uploaded file, matching the 50 MB upload cap in .streamlit/config.toml and the launchers.
-MAX_BYTES = 50 * 1024 * 1024
+from learnsignal import limits
 
 
 class DataProblem(ValueError):
@@ -36,8 +34,10 @@ def number(low=0, high=1e12, nullable=False):
     return {"anyOf": [spec, {"type": "null"}]} if nullable else spec
 
 
-def array(item, limit=500, minimum=0):
-    return {"type": "array", "items": item, "minItems": minimum, "maxItems": limit}
+def array(item, limit=None, minimum=0):
+    """An array schema. Record counts are unbounded unless a structural maximum is given (demo caps live in limits)."""
+    spec = {"type": "array", "items": item, "minItems": minimum}
+    return spec if limit is None else {**spec, "maxItems": limit}
 
 
 ID = {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,39}$"}
@@ -59,9 +59,12 @@ def finite(value):
 
 def parse(payload):
     try:
-        value = payload.decode("utf-8-sig") if isinstance(payload, bytes) else payload
-        if len(value.encode("utf-8")) > MAX_BYTES:
-            raise DataProblem(f"Keep the JSON file below {MAX_BYTES // 2**20} MB.")
+        if isinstance(payload, bytes):
+            limits.check("upload_bytes", len(payload), "This JSON file")
+            value = payload.decode("utf-8-sig")
+        else:
+            limits.check("paste_chars", len(payload), "This pasted text has too many characters")
+            value = payload
         value = value.strip().lstrip("\ufeff")
         match = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", value, re.S | re.I)
         if match:
@@ -78,6 +81,8 @@ def parse(payload):
         if not isinstance(result, dict):
             raise DataProblem("Paste one JSON object.")
         return result
+    except MemoryError as exc:
+        raise DataProblem(limits.MEMORY) from exc
     except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise DataProblem("Invalid UTF-8 JSON. Paste only the complete object, without introductory prose.") from exc
     except ValueError as exc:

@@ -1,10 +1,14 @@
-"""Exact finite-state Bayesian decision analysis with explicit study likelihoods."""
-from copy import deepcopy
+"""Exact finite-state Bayesian decision analysis with explicit study likelihoods.
+
+Every calculation is polynomial in the table size (options x scenarios x study results), so there is no size limit
+locally; a public demo caps record counts through limits.py.
+"""
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
 
-from learnsignal import portable as io
+from learnsignal import limits, portable as io
 
 REF = {"anyOf": [io.ID, {"type": "null"}]}
 STATE = io.obj({"id": io.ID, "label": io.text(150), "probability": io.number(0, 1, True), "note": io.text(1000, True), "source_id": REF})
@@ -16,9 +20,11 @@ QUESTION = io.obj({"id": io.ID, "label": io.text(250)})
 PARTITION = io.obj({"question_id": io.ID, "state_id": io.ID, "answer": io.text(150)})
 SCHEMA = io.obj({"schema_version": {"const": "1.0"}, "brief": io.text(2500),
                  "context": io.array(io.obj({"unit": io.text(50), "horizon": io.text(200)}), 1, 1),
-                 "states": io.array(STATE, 30, 2), "actions": io.array(ACTION, 12, 2), "payoffs": io.array(PAYOFF, 360),
-                 "studies": io.array(STUDY, 12), "signals": io.array(SIGNAL, 3600),
-                 "questions": io.array(QUESTION, 20), "partitions": io.array(PARTITION, 600), "sources": io.array(io.SOURCE, 100)})
+                 "states": io.array(STATE, minimum=2), "actions": io.array(ACTION, minimum=2), "payoffs": io.array(PAYOFF),
+                 "studies": io.array(STUDY), "signals": io.array(SIGNAL),
+                 "questions": io.array(QUESTION), "partitions": io.array(PARTITION), "sources": io.array(io.SOURCE)})
+DEMO_COUNTS = {"states": "Future scenarios", "actions": "Decision options", "payoffs": "Payoffs", "studies": "Research studies",
+               "signals": "Study results", "questions": "Questions", "partitions": "Answers", "sources": "Sources"}
 TITLES = {"context": "One common payoff unit and horizon · higher payoff is better",
           "states": "Mutually exclusive, exhaustive future states · probabilities must sum to one",
           "actions": "Available decisions · include a feasible fallback",
@@ -61,6 +67,10 @@ def probability_total(values, label):
 
 
 def validate(data):
+    if isinstance(data, dict):
+        for kind, title in DEMO_COUNTS.items():
+            if isinstance(data.get(kind), list):
+                limits.check(kind, len(data[kind]), f"{title} has too many rows")
     d = io.validate_schema(data, SCHEMA)
     states, actions, studies, questions, sources = [io.unique(d[k]) for k in ["states", "actions", "studies", "questions", "sources"]]
     probability_total([s["probability"] for s in d["states"]], "State probabilities")
@@ -77,17 +87,16 @@ def validate(data):
             if key in seen or any(m is not None and row[f] not in m for f, m in zip(fields, maps)):
                 raise io.DataProblem(f"{kind}: duplicate combination or missing referenced record.")
             seen.add(key)
+    outcomes, cells = defaultdict(set), defaultdict(list)
+    for r in d["signals"]:
+        outcomes[r["study_id"]].add(r["outcome"])
+        cells[(r["study_id"], r["state_id"])].append(r["probability"])
     for study in d["studies"]:
-        rows = [r for r in d["signals"] if r["study_id"] == study["id"]]
-        outcomes = {r["outcome"] for r in rows}
-        if len(outcomes) > 10:
-            raise io.DataProblem("Use at most 10 possible results per study.")
+        limits.check("results_per_study", len(outcomes[study["id"]]), f"{study['id']} has too many possible results")
         for state in states:
-            cell = [r for r in rows if r["state_id"] == state]
-            if cell:
-                values = [r["probability"] for r in cell]
-                if len(cell) < len(outcomes):
-                    values.append(None)
+            values = cells.get((study["id"], state))
+            if values:
+                values = values + [None] * (len(outcomes[study["id"]]) - len(values))
                 probability_total(values, f"Likelihoods for {study['id']} in state {state}")
     return d
 
@@ -144,38 +153,49 @@ def analyze(d):
     current, perfect = float(ev.max()), float(utility.max(axis=0) @ prior)
     tol = max(1e-8, np.abs(utility).max() * 1e-12)
     def best(values):
-        return " / ".join(a["label"] for a, v in zip(actions, values) if abs(v - max(values)) <= tol)
+        top = float(np.max(values))
+        return " / ".join(a["label"] for a, v in zip(actions, values) if abs(v - top) <= tol)
     action_table = pd.DataFrame([{"action": a["label"], "expected_payoff": float(ev[i]), "expected_opportunity_loss": max(0.0, perfect-float(ev[i]))} for i,a in enumerate(actions)])
     studies, policies, posteriors = [], [], []
+    by_study = defaultdict(list)
+    for r in d["signals"]:
+        by_study[r["study_id"]].append(r)
     for study in d["studies"]:
-        rows = [r for r in d["signals"] if r["study_id"] == study["id"]]
+        rows = by_study[study["id"]]
         outcomes = sorted({r["outcome"] for r in rows})
         lookup = {(r["state_id"], r["outcome"]): r["probability"] for r in rows}
         complete = bool(outcomes) and all(lookup.get((s["id"],o)) is not None for s in states for o in outcomes)
         if not complete or study["cost"] is None:
             studies.append({"study": study["label"], "status": "Missing likelihoods or cost", "evsi": None, "cost": study["cost"], "net_value": None})
             continue
-        informed = 0.0
-        for outcome in outcomes:
-            joint = prior * np.array([lookup[(s["id"], outcome)] for s in states])
-            probability = float(joint.sum())
-            weighted_payoffs = utility @ joint
-            informed += float(weighted_payoffs.max())
-            policies.append({"study": study["label"], "result": outcome, "result_probability": probability,
-                             "preferred_action": best(weighted_payoffs / probability) if probability > 0 else "Impossible under this model",
-                             "conditional_payoff": float(weighted_payoffs.max()/probability) if probability > 0 else None})
-            for s, mass in zip(states, joint):
-                posteriors.append({"study": study["label"], "result": outcome, "state": s["label"], "posterior_probability": float(mass/probability) if probability > 0 else None})
+        likelihood = np.array([[lookup[(s["id"], o)] for s in states] for o in outcomes])  # results x states
+        joint = likelihood * prior                                                          # p(s) L(y|s)
+        probability = joint.sum(axis=1)
+        weighted = joint @ utility.T                                                        # results x actions
+        informed = float(weighted.max(axis=1).sum())
+        for i, outcome in enumerate(outcomes):
+            p_y = float(probability[i])
+            policies.append({"study": study["label"], "result": outcome, "result_probability": p_y,
+                             "preferred_action": best(weighted[i] / p_y) if p_y > 0 else "Impossible under this model",
+                             "conditional_payoff": float(weighted[i].max()/p_y) if p_y > 0 else None})
+            for s, mass in zip(states, joint[i]):
+                posteriors.append({"study": study["label"], "result": outcome, "state": s["label"], "posterior_probability": float(mass/p_y) if p_y > 0 else None})
         evsi = max(0.0, informed-current)
         studies.append({"study": study["label"], "status": "Complete", "evsi": evsi, "cost": study["cost"], "net_value": evsi-study["cost"]})
     questions = []
+    by_question = defaultdict(dict)
+    for r in d["partitions"]:
+        by_question[r["question_id"]][r["state_id"]] = r["answer"]
+    weighted_states = utility * prior                                                       # actions x states
     for question in d["questions"]:
-        rows = [r for r in d["partitions"] if r["question_id"] == question["id"]]
-        answers = {r["state_id"]:r["answer"] for r in rows}
+        answers = by_question[question["id"]]
         if set(answers) != {s["id"] for s in states}:
             questions.append({"question": question["label"], "perfect_answer_value": None, "status": "Answer missing for a state"})
             continue
-        value = sum(float((utility @ (prior * np.array([answers[s["id"]] == answer for s in states]))).max()) for answer in set(answers.values()))
+        codes = pd.factorize(pd.Series([answers[s["id"]] for s in states]))[0]
+        grouped = np.zeros((utility.shape[0], codes.max() + 1))
+        np.add.at(grouped.T, codes, weighted_states.T)                                      # sum the states sharing an answer
+        value = float(grouped.max(axis=0).sum())
         questions.append({"question": question["label"], "perfect_answer_value": max(0.0,value-current), "status": "Complete"})
     return {"current_value": current, "perfect_value": perfect, "evpi": max(0.0,perfect-current), "preferred": best(ev),
             "actions": action_table, "studies": pd.DataFrame(studies, columns=["study","status","evsi","cost","net_value"]),
@@ -185,16 +205,28 @@ def analyze(d):
 
 
 def sensitivity(d, state_id):
+    """Vary one prior from 0 to 1 on a 0.025 grid; the other states keep their relative probabilities."""
+    d = validate(d)
     original = next(s["probability"] for s in d["states"] if s["id"] == state_id)
     if original is None or original >= 1:
         raise io.DataProblem("Sensitivity needs a selected state below probability 1 and a defined distribution across the other states.")
+    missing = readiness(d)
+    if missing:
+        raise io.DataProblem("Complete these inputs before calculating: " + "; ".join(missing[:12]))
+    states, actions = d["states"], d["actions"]
+    pay = {(x["action_id"], x["state_id"]): x["value"] for x in d["payoffs"]}
+    utility = np.array([[pay[(a["id"], s["id"])] for s in states] for a in actions], dtype=float)
+    base = np.array([s["probability"] for s in states], dtype=float)
+    selected = np.array([s["id"] == state_id for s in states])
+    tol = max(1e-8, np.abs(utility).max() * 1e-12)
     rows = []
     for probability in np.linspace(0, 1, 41):
-        changed = deepcopy(d)
-        for s in changed["states"]:
-            s["probability"] = float(probability) if s["id"] == state_id else s["probability"]/(1-original)*(1-probability)
-        result = analyze(changed)
-        rows.append({"state_probability": probability, "current_value": result["current_value"], "evpi": result["evpi"], "preferred_action": result["preferred"]})
+        prior = np.where(selected, probability, base / (1 - original) * (1 - probability))
+        ev = utility @ prior
+        current = float(ev.max())
+        preferred = " / ".join(a["label"] for a, v in zip(actions, ev) if abs(v - current) <= tol)
+        rows.append({"state_probability": probability, "current_value": current,
+                     "evpi": max(0.0, float(utility.max(axis=0) @ prior) - current), "preferred_action": preferred})
     return pd.DataFrame(rows)
 
 

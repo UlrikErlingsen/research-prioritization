@@ -229,24 +229,64 @@ def test_bad_upload_does_not_change_current_project(monkeypatch):
     assert a.session_state[NAME+":project"] == original
 
 
-def test_files_above_the_old_5_mb_limit_are_read_and_the_50_mb_cap_is_enforced():
-    long_note = "x" * 100_000  # below the CSV module's 128 KB field limit
-    raw = ("decision,scenario,note\n" + "".join(f"A,S{i},{long_note}\n" for i in range(61))).encode()
-    assert len(raw) > 6_000_000
-    assert len(sheets.load_tables([("big.csv", raw)])["big"]) == 61
-    with pytest.raises(io.DataProblem, match="50 MB"):
-        sheets.load_tables([("huge.csv", b"a\n" + b"1" * sheets.MAX_BYTES)])
-    payload = '{"note": "' + "y" * 6_000_000 + '"}'
-    assert io.parse(payload)["note"].startswith("y")
-    with pytest.raises(io.DataProblem, match="50 MB"):
-        io.parse('{"note": "' + "y" * io.MAX_BYTES + '"}')
+@pytest.fixture
+def local(monkeypatch):
+    monkeypatch.delenv("SIGNAL_PUBLIC", raising=False)
 
 
-def test_row_limit_is_a_method_limit_with_a_clear_reason():
-    raw = ("decision,scenario\n" + "A,S\n" * (sheets.MAX_ROWS + 1)).encode()
-    with pytest.raises(io.DataProblem, match="3,600 study-result rows"):
-        sheets.load_tables([("long.csv", raw)])
-    # The model itself caps every table well below the row limit.
-    tables = model.SCHEMA["properties"]
-    assert max(tables[name]["maxItems"] for name in model.TITLES) < sheets.MAX_ROWS
-    assert tables["actions"]["maxItems"] * tables["states"]["maxItems"] == tables["payoffs"]["maxItems"]
+@pytest.fixture
+def public(monkeypatch):
+    monkeypatch.setenv("SIGNAL_PUBLIC", "1")
+
+
+def _wide_csv(rows, columns, cell="1"):
+    header = ",".join(f"c{j}" for j in range(columns))
+    return (header + "\n" + (",".join([cell] * columns) + "\n") * rows).encode()
+
+
+def test_local_reads_beyond_every_demo_cap(local):
+    from learnsignal import limits
+
+    assert limits.cap("rows") is None and limits.cap("upload_bytes") is None
+    long_rows = sheets.load_tables([("long.csv", _wide_csv(limits.DEMO["rows"] + 500, 2))])["long"]
+    assert len(long_rows) == limits.DEMO["rows"] + 500
+    wide = sheets.load_tables([("wide.csv", _wide_csv(2_600, 100))])["wide"]  # 100 columns, 262,600 cells
+    assert wide.shape == (2_600, 100)
+    big_cell = sheets.load_tables([("note.csv", ("a,note\n1," + "x" * 300_000 + "\n").encode())])["note"]
+    assert len(big_cell.iloc[0]["note"]) == 300_000  # beyond the csv module's default 128 KB field limit
+    many = [(f"part{i}.csv", _wide_csv(1, 2)) for i in range(limits.DEMO["sheets"] + 5)]
+    assert len(sheets.load_tables(many)) == limits.DEMO["sheets"] + 5
+    payload = b'{"note": "' + b"y" * (limits.DEMO["upload_bytes"] + 1) + b'"}'
+    assert len(io.parse(payload)["note"]) == limits.DEMO["upload_bytes"] + 1
+    assert io.parse('{"a": "' + "z" * (limits.DEMO["paste_chars"] + 1) + '"}')["a"].startswith("z")
+
+
+@pytest.mark.parametrize("files, text", [
+    ([("long.csv", _wide_csv(10_001, 2))], "too many rows"),
+    ([("wide.csv", _wide_csv(2, 81))], "too many columns"),
+    ([("wide.csv", _wide_csv(3_200, 79))], "too many cells"),
+    ([("huge.csv", b"a\n" + b"1" * (50 * 1024 * 1024))], "too large"),
+])
+def test_public_demo_enforces_the_caps(public, files, text):
+    with pytest.raises(io.DataProblem, match=text) as problem:
+        sheets.load_tables(files)
+    assert "public demo" in str(problem.value) and "downloaded app has none" in str(problem.value)
+
+
+def test_public_demo_caps_json_and_pasted_text(public):
+    with pytest.raises(io.DataProblem, match="public demo"):
+        io.parse(b'{"n": "' + b"y" * (50 * 1024 * 1024) + b'"}')
+    with pytest.raises(io.DataProblem, match="public demo"):
+        io.parse('{"n": "' + "y" * 1_000_000 + '"}')
+
+
+def test_running_out_of_memory_is_a_clear_message(monkeypatch):
+    def no_memory(*args, **kwargs):
+        raise MemoryError
+
+    monkeypatch.setattr(sheets, "_load_tables", no_memory)
+    with pytest.raises(io.DataProblem, match="Not enough memory"):
+        sheets.load_tables([("x.csv", b"a\n1\n")])
+    monkeypatch.setattr(io.json, "loads", no_memory)
+    with pytest.raises(io.DataProblem, match="Not enough memory"):
+        io.parse('{"a": 1}')

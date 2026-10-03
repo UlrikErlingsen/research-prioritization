@@ -1,4 +1,6 @@
 """Friendly decision/outcome spreadsheet layout."""
+from collections import defaultdict
+
 from . import model, portable as io
 
 TABLE_NAMES = {"context": "Scope", "states": "Future scenarios", "actions": "Decision options", "payoffs": "Payoffs", "studies": "Research studies", "signals": "Study results", "questions": "Questions", "partitions": "Answers", "sources": "Sources"}
@@ -30,8 +32,12 @@ def build(brief, tables, settings, source):
     d["sources"] = [{"id": "FILE1", "title": source[:300], "url": None, "note": "User-supplied decision table. Probabilities and payoffs are assumptions or estimates to review."}]
     d["actions"] = [{"id": aids[s], "label": s} for s in actions]
     d["states"] = []
+    supplied = defaultdict(list)
+    for r in rows:
+        if r["probability"] is not None:
+            supplied[r["scenario"]].append(r["probability"])
     for label in states:
-        values = [r["probability"] for r in rows if r["scenario"] == label and r["probability"] is not None]
+        values = supplied[label]
         if values and max(values) - min(values) > 1e-9:
             raise io.DataProblem(f"The scenario '{label}' has different probabilities in different rows. Use one probability for that scenario.")
         d["states"].append({"id": sids[label], "label": label, "probability": values[0] if values else None, "source_id": "FILE1", "note": "Probability supplied in the decision table."})

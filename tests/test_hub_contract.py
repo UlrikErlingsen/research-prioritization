@@ -222,14 +222,39 @@ def test_render_reads_no_repo_root_files(monkeypatch: pytest.MonkeyPatch) -> Non
         assert (UI / "assets" / "marks" / name).exists()
 
 
-def test_upload_cap_is_50_mb_everywhere() -> None:
-    from learnsignal import portable, spreadsheets
+def test_upload_cap_is_10000_mb_and_demo_caps_live_in_one_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    from learnsignal import limits
 
     config = (ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8")
-    assert re.search(r"^maxUploadSize = 50$", config, re.M)
-    assert portable.MAX_BYTES == spreadsheets.MAX_BYTES == 50 * 1024 * 1024
+    assert re.search(r"^maxUploadSize = 10000$", config, re.M)
     docker = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    assert "STREAMLIT_SERVER_MAX_UPLOAD_SIZE=50" in docker and "maxUploadSize" not in docker
-    assert 'set LEARNSIGNAL_MAX_UPLOAD_MB=50' in (ROOT / "run_app.bat").read_text(encoding="utf-8")
-    assert "${LEARNSIGNAL_MAX_UPLOAD_MB:-50}" in (ROOT / "run_app.command").read_text(encoding="utf-8")
+    assert "STREAMLIT_SERVER_MAX_UPLOAD_SIZE=10000" in docker and "maxUploadSize" not in docker
+    assert "set LEARNSIGNAL_MAX_UPLOAD_MB=10000" in (ROOT / "run_app.bat").read_text(encoding="utf-8")
+    assert "${LEARNSIGNAL_MAX_UPLOAD_MB:-10000}" in (ROOT / "run_app.command").read_text(encoding="utf-8")
     assert b"\r\n" not in (ROOT / "run_app.command").read_bytes()
+    # No other module hard-codes a size cap: every one comes from limits.py. (Short field lengths such as the
+    # 2,500-character case brief are format rules shared with the JSON schema, not data limits.)
+    for path in PACKAGE.rglob("*.py"):
+        if path.name in GENERATED | {"limits.py"}:
+            continue
+        source = path.read_text(encoding="utf-8")
+        assert not re.search(r'MAX_[A-Z]+\s*=|max_chars=\d{5,}|"maxItems": \d', source), path.name
+    monkeypatch.delenv("SIGNAL_PUBLIC", raising=False)
+    assert all(limits.cap(name) is None for name in limits.DEMO)
+    monkeypatch.setenv("SIGNAL_PUBLIC", "1")
+    assert limits.cap("upload_bytes") == 50 * 1024 * 1024 and limits.cap("states") == 30
+
+
+def test_public_demo_shows_its_limits_and_local_does_not(monkeypatch: pytest.MonkeyPatch) -> None:
+    for public in (False, True):
+        if public:
+            monkeypatch.setenv("SIGNAL_PUBLIC", "1")
+        else:
+            monkeypatch.delenv("SIGNAL_PUBLIC", raising=False)
+        app = AppTest.from_string(RENDER, default_timeout=120).run()
+        app.sidebar.radio(key="learn:page").set_value("1 · Add your data").run()
+        assert not app.exception
+        shown = any("Public demo limits" in str(c.value) for c in app.caption)
+        assert shown is public
+        ai = app.radio(key="learn:input_mode").set_value("Use your AI").run()
+        assert bool(ai.text_area(key="learn:ai_json").max_chars) is public  # AppTest reports no limit as 0

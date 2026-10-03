@@ -4,10 +4,21 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from learnsignal import __version__, model, portable as io
+from learnsignal import __version__, limits, model, portable as io
 from learnsignal.ui import signal_theme as sig
 from learnsignal.ui.keys import NS, k
 from learnsignal.ui.workspace import Workspace
+
+
+SHOWN_ROWS = 50_000  # what the browser draws; calculations and exports always use every row
+
+
+def table(frame, digits):
+    """Draw a result table. Very long tables show their first rows with a note; Export has them all."""
+    if len(frame) > SHOWN_ROWS:
+        st.caption(f"Showing the first {SHOWN_ROWS:,} of {len(frame):,} rows. Every row is in the ZIP export.")
+        frame = frame.head(SHOWN_ROWS)
+    st.dataframe(frame.round(digits), hide_index=True, width="stretch")
 
 
 def calculation(w):
@@ -65,7 +76,7 @@ def render() -> None:
                 c2.metric("With perfect information", f"{result['perfect_value']:,.1f}")
                 c3.metric("Perfect-information value · EVPI", f"{result['evpi']:,.1f}")
                 st.text("Preferred action under current assumptions: " + result["preferred"])
-                st.dataframe(result["actions"].round(3), hide_index=True, width="stretch")
+                table(result["actions"], 3)
                 st.subheader("Compare candidate studies")
                 if result["studies"].empty:
                     st.info("Add studies and their result likelihoods to compare research value.")
@@ -78,18 +89,18 @@ def render() -> None:
                         fig.update_layout(barmode="group", height=380, yaxis_title=escape(unit), legend={"orientation":"h","y":1.15})
                         fig.update_yaxes(zeroline=True, rangemode="tozero")
                         sig.chart(NS,fig,key=k("study_chart"))
-                    st.dataframe(result["studies"].round(3),hide_index=True,width="stretch")
+                    table(result["studies"], 3)
                 sig.note("info", "**EVPI is a ceiling under this model.** A study's expected information value depends on how often its results change the choice. A positive value after cost is conditional on your inputs and does not authorize spending.")
                 st.subheader("Which uncertainty would be useful to resolve?")
-                st.dataframe(result["questions"].round(3),hide_index=True,width="stretch")
+                table(result["questions"], 3)
                 st.caption("Each question assumes its answer could be learned perfectly. Values may overlap and must not be added together.")
         elif page == pages[4]:
             sig.header("RESULT → POSTERIOR → CHOICE", "What would you do after each study result?")
             result = calculation(w)
             if result is not None:
-                st.dataframe(result["policies"].round(4),hide_index=True,width="stretch")
+                table(result["policies"], 4)
                 with st.expander("Posterior state probabilities"):
-                    st.dataframe(result["posteriors"].round(5),hide_index=True,width="stretch")
+                    table(result["posteriors"], 5)
                 st.subheader("How sensitive is the decision to a prior?")
                 names = {s["id"]:s["label"] for s in w.d["states"]}
                 sid = st.selectbox("State to vary",list(names),format_func=names.get,key=k("vary_state"))
@@ -101,7 +112,7 @@ def render() -> None:
                 sig.chart(NS,fig,key=k("sensitivity"))
                 st.caption("The remaining states retain their relative probabilities. This is a one-dimensional assumption check, not a confidence interval.")
                 transitions = frame[frame.preferred_action.ne(frame.preferred_action.shift())]
-                st.dataframe(transitions.round(4),hide_index=True,width="stretch")
+                table(transitions, 4)
                 st.caption("Rows mark changes found on a 0.025 probability grid; exact switch points may lie between rows.")
         elif page == pages[5]:
             tables = {k:pd.DataFrame(w.d[k]) for k in model.TITLES}
@@ -112,4 +123,6 @@ def render() -> None:
             w.research()
     except io.DataProblem as exc:
         st.error(str(exc))
+    except MemoryError:
+        st.error(limits.MEMORY)
     sig.footer(NS, __version__, "Research value conditional on the decision model")

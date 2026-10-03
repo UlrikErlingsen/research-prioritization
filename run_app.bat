@@ -22,7 +22,7 @@ if errorlevel 1 (
 )
 if not defined ARROW_DEFAULT_MEMORY_POOL set ARROW_DEFAULT_MEMORY_POOL=system
 if "%LEARNSIGNAL_PORT%"=="" set LEARNSIGNAL_PORT=8601
-if "%LEARNSIGNAL_MAX_UPLOAD_MB%"=="" set LEARNSIGNAL_MAX_UPLOAD_MB=50
+if "%LEARNSIGNAL_MAX_UPLOAD_MB%"=="" set LEARNSIGNAL_MAX_UPLOAD_MB=10000
 echo Starting Learn Signal at http://127.0.0.1:%LEARNSIGNAL_PORT% ...
 ".venv\Scripts\python.exe" -m streamlit run app.py --server.headless=true --server.address=127.0.0.1 --server.port=%LEARNSIGNAL_PORT% --server.maxUploadSize=%LEARNSIGNAL_MAX_UPLOAD_MB% --server.fileWatcherType=none --browser.gatherUsageStats=false
 if errorlevel 1 pause

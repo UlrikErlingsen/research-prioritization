@@ -4,7 +4,7 @@ import hashlib
 import pandas as pd
 import streamlit as st
 
-from learnsignal import input_format as fmt, portable as io, spreadsheets as sheets
+from learnsignal import input_format as fmt, limits, portable as io, spreadsheets as sheets
 from learnsignal.ui.keys import k
 
 MODES = ["Excel or CSV", "Enter manually", "Use your AI"]
@@ -68,8 +68,11 @@ def context_controls(stem):
 def spreadsheet_input(w):
     templates(w)
     uploads = st.file_uploader("Upload your Excel workbook or CSV files", type=["xlsx", "csv"], accept_multiple_files=True, key=k("spreadsheets"))
-    st.caption(f"Excel can contain several sheets. For separate CSV tables, select the files together (up to {sheets.MAX_BYTES // 2**20} MB in total). "
+    st.caption("Excel can contain several sheets. For separate CSV tables, select the files together. "
                "Files are read in memory for this session only; nothing is written to disk or sent to an AI.")
+    if limits.public():
+        st.caption(f"Public demo limits: {limits.describe('upload_bytes')} in total, {limits.describe('rows')} rows per sheet "
+                   f"and {limits.describe('cells')} cells. " + limits.DEMO_NOTE)
     if not uploads:
         return
     files = [(u.name, u.getvalue()) for u in uploads]
