@@ -227,3 +227,26 @@ def test_bad_upload_does_not_change_current_project(monkeypatch):
     a.button(key=NAME+":start:Excel or CSV").click().run()
     assert a.error and not a.exception
     assert a.session_state[NAME+":project"] == original
+
+
+def test_files_above_the_old_5_mb_limit_are_read_and_the_50_mb_cap_is_enforced():
+    long_note = "x" * 100_000  # below the CSV module's 128 KB field limit
+    raw = ("decision,scenario,note\n" + "".join(f"A,S{i},{long_note}\n" for i in range(61))).encode()
+    assert len(raw) > 6_000_000
+    assert len(sheets.load_tables([("big.csv", raw)])["big"]) == 61
+    with pytest.raises(io.DataProblem, match="50 MB"):
+        sheets.load_tables([("huge.csv", b"a\n" + b"1" * sheets.MAX_BYTES)])
+    payload = '{"note": "' + "y" * 6_000_000 + '"}'
+    assert io.parse(payload)["note"].startswith("y")
+    with pytest.raises(io.DataProblem, match="50 MB"):
+        io.parse('{"note": "' + "y" * io.MAX_BYTES + '"}')
+
+
+def test_row_limit_is_a_method_limit_with_a_clear_reason():
+    raw = ("decision,scenario\n" + "A,S\n" * (sheets.MAX_ROWS + 1)).encode()
+    with pytest.raises(io.DataProblem, match="3,600 study-result rows"):
+        sheets.load_tables([("long.csv", raw)])
+    # The model itself caps every table well below the row limit.
+    tables = model.SCHEMA["properties"]
+    assert max(tables[name]["maxItems"] for name in model.TITLES) < sheets.MAX_ROWS
+    assert tables["actions"]["maxItems"] * tables["states"]["maxItems"] == tables["payoffs"]["maxItems"]

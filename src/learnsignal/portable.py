@@ -15,6 +15,10 @@ import pandas as pd
 from jsonschema import Draft202012Validator, FormatChecker
 
 
+# Byte limit for any uploaded file, matching the 50 MB upload cap in .streamlit/config.toml and the launchers.
+MAX_BYTES = 50 * 1024 * 1024
+
+
 class DataProblem(ValueError):
     pass
 
@@ -56,8 +60,8 @@ def finite(value):
 def parse(payload):
     try:
         value = payload.decode("utf-8-sig") if isinstance(payload, bytes) else payload
-        if len(value.encode("utf-8")) > 5_000_000:
-            raise DataProblem("Keep the JSON file below 5 MB.")
+        if len(value.encode("utf-8")) > MAX_BYTES:
+            raise DataProblem(f"Keep the JSON file below {MAX_BYTES // 2**20} MB.")
         value = value.strip().lstrip("\ufeff")
         match = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", value, re.S | re.I)
         if match:

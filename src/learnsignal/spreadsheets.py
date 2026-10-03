@@ -16,9 +16,18 @@ import pandas as pd
 from . import input_format as fmt, portable as io
 
 MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-MAX_BYTES = 5_000_000
+# File size follows the 50 MB upload cap in .streamlit/config.toml and the launchers.
+MAX_BYTES = io.MAX_BYTES
+# Method limits, not file-size limits. The exact model holds at most 30 scenarios, 12 options, 360 payoffs and
+# 12 studies with up to 10 results (3,600 likelihood rows), so no decision table needs more rows than this. They stop
+# a large unrelated workbook from tying up the session; MAX_UNPACKED guards against compressed-archive bombs.
 MAX_ROWS = 10_000
+MAX_COLUMNS = 80
+MAX_SHEETS = 30
 MAX_CELLS = 250_000
+MAX_UNPACKED = 200 * 1024 * 1024
+TOO_LONG = ("keep at most {rows:,} rows and {columns} columns. Learn Signal's exact model holds at most 30 scenarios, "
+            "12 options and 3,600 study-result rows, so remove rows and sheets that are not part of the decision table.")
 COMMON_LABELS = {"id": "Reference", "name": "Name", "source_id": "Source reference", "note": "Notes", "url": "Source URL", "title": "Source title"}
 
 
@@ -52,8 +61,8 @@ def _frame(rows, title):
         raise io.DataProblem(f"{title}: put a name in every used column of the first row.")
     if len(set(map(normalize, header))) != len(header):
         raise io.DataProblem(f"{title}: column names must be distinct. Rename the duplicate headings.")
-    if len(rows)-1 > MAX_ROWS or len(header) > 80:
-        raise io.DataProblem(f"{title}: keep at most {MAX_ROWS:,} rows and 80 columns.")
+    if len(rows)-1 > MAX_ROWS or len(header) > MAX_COLUMNS:
+        raise io.DataProblem(f"{title}: " + TOO_LONG.format(rows=MAX_ROWS, columns=MAX_COLUMNS))
     data = []
     for index, row in enumerate(rows[1:], 2):
         if any(v not in (None, "") for v in row[len(header):]):
@@ -67,7 +76,7 @@ def _frame(rows, title):
 def load_tables(files):
     """files is [(filename, bytes)]; no file contents enter a shared cache."""
     if not files or sum(len(raw) for _, raw in files) > MAX_BYTES:
-        raise io.DataProblem("Choose Excel (.xlsx) or UTF-8 CSV files totalling no more than 5 MB.")
+        raise io.DataProblem(f"Choose Excel (.xlsx) or UTF-8 CSV files totalling no more than {MAX_BYTES // 2**20} MB.")
     tables = {}
     cell_count = 0
     for filename, raw in files:
@@ -83,27 +92,29 @@ def load_tables(files):
                 reader = csv.reader(StringIO(text), dialect, strict=True)
                 rows = []
                 for row in reader:
-                    if len(rows) > MAX_ROWS or len(row) > 80:
-                        raise io.DataProblem(f"{filename}: keep at most {MAX_ROWS:,} rows and 80 columns.")
+                    if len(rows) > MAX_ROWS or len(row) > MAX_COLUMNS:
+                        raise io.DataProblem(f"{filename}: " + TOO_LONG.format(rows=MAX_ROWS, columns=MAX_COLUMNS))
                     rows.append(row)
                 parsed[Path(filename).stem] = _frame(rows, filename)
             elif suffix == ".xlsx":
                 with ZipFile(BytesIO(raw)) as archive:
-                    if sum(f.file_size for f in archive.infolist()) > 25_000_000 or len(archive.infolist()) > 1000:
-                        raise io.DataProblem("This workbook is too large when opened. Keep only the sheets and rows you need.")
+                    if sum(f.file_size for f in archive.infolist()) > MAX_UNPACKED or len(archive.infolist()) > 1000:
+                        raise io.DataProblem(f"This workbook unpacks to more than {MAX_UNPACKED // 2**20} MB. "
+                                             "Keep only the sheets and rows of the decision table.")
                 formulas = load_workbook(BytesIO(raw), read_only=True, data_only=False, keep_links=False)
                 cached = None
                 try:
-                    if len(formulas.worksheets) > 30:
-                        raise io.DataProblem("Keep at most 30 sheets in the workbook.")
+                    if len(formulas.worksheets) > MAX_SHEETS:
+                        raise io.DataProblem(f"Keep at most {MAX_SHEETS} sheets in the workbook.")
                     cached = load_workbook(BytesIO(raw), read_only=True, data_only=True, keep_links=False)
                     for sheet in formulas.worksheets:
-                        if sheet.max_row and sheet.max_row > MAX_ROWS + 1 or sheet.max_column and sheet.max_column > 80:
-                            raise io.DataProblem(f"{sheet.title}: keep at most {MAX_ROWS:,} rows and 80 columns, including formatted cells.")
+                        if sheet.max_row and sheet.max_row > MAX_ROWS + 1 or sheet.max_column and sheet.max_column > MAX_COLUMNS:
+                            raise io.DataProblem(f"{sheet.title} (including formatted empty cells): "
+                                                 + TOO_LONG.format(rows=MAX_ROWS, columns=MAX_COLUMNS))
                         rows = []
                         for row, saved in zip(sheet.iter_rows(), cached[sheet.title].iter_rows()):
                             if len(rows) > MAX_ROWS:
-                                raise io.DataProblem("Too many workbook rows.")
+                                raise io.DataProblem(f"{sheet.title}: " + TOO_LONG.format(rows=MAX_ROWS, columns=MAX_COLUMNS))
                             values = []
                             for cell, value in zip(row, saved):
                                 if cell.data_type == "f":
@@ -131,7 +142,8 @@ def load_tables(files):
                 continue
             cell_count += (len(frame)+1) * len(frame.columns)
             if cell_count > MAX_CELLS:
-                raise io.DataProblem("The combined files contain too many cells. Remove unused sheets and columns.")
+                raise io.DataProblem(f"The combined files contain more than {MAX_CELLS:,} cells. Learn Signal's decision "
+                                     "tables are much smaller: remove unused sheets and columns.")
             title = name if name not in tables else f"{Path(filename).stem} / {name}"
             if title in tables:
                 raise io.DataProblem("Two files have the same sheet names. Rename a file or sheet to distinguish them.")
