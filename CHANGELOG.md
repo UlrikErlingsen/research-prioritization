@@ -2,6 +2,21 @@
 
 All notable changes to Learn Signal are documented here.
 
+## [1.1.0] - 2026-10-03
+
+### Changed
+
+- **No built-in data limits on your own computer.** The caps on file size (was 50 MB), rows (10,000 per sheet), columns (80), sheets (30), cells (250,000), unpacked workbook size, pasted text (1,000,000 characters), scenarios (30), options (12), studies (12), results per study (10), study-result rows (3,600), questions, answers and sources are gone. None was mathematically necessary: every calculation grows with options × scenarios × study results.
+- Validation, EVSI, question values and the sensitivity check now group and vectorise instead of rescanning lists, so a 1,000-scenario model calculates in seconds.
+- The upload cap is 10,000 MB in `.streamlit/config.toml`, both launchers (`LEARNSIGNAL_MAX_UPLOAD_MB`) and the Dockerfile.
+
+### Added
+
+- **Public demo caps** under `SIGNAL_PUBLIC=1`, all in `src/learnsignal/limits.py`, using the 1.0.0 values. Capped messages say it is a demo limit and that the downloaded app has none; the data page lists the caps.
+- Running out of memory gives a plain message instead of a crash.
+- Result tables longer than 50,000 rows show their first rows on screen with a note; exports keep every row.
+- Long CSV cells beyond the csv module's 128 KB default are read.
+
 ## [1.0.0] - 2026-10-03
 
 First public release.
