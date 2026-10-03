@@ -31,8 +31,8 @@ Everything runs locally with open-source Python packages. There is no account, t
 
 **Version 1.0 supports:**
 
-- a finite decision model with 2–30 mutually exclusive scenarios, 2–12 decision options and a net payoff for every option in every scenario, in one stated unit and time horizon;
-- up to 12 candidate studies, each with a cost and up to 10 possible results, described by the probability of each result in each scenario, P(result | scenario);
+- a finite decision model with two or more mutually exclusive scenarios, two or more decision options and a net payoff for every option in every scenario, in one stated unit and time horizon;
+- any number of candidate studies, each with a cost and its possible results, described by the probability of each result in each scenario, P(result | scenario);
 - up to 20 questions, each describing what a perfectly answered uncertainty would reveal about the scenarios;
 - exact expected values, expected opportunity loss, EVPI, EVSI and net value after study cost, the preferred decision after each study result, posterior scenario probabilities and the value of perfectly answering each question;
 - a one-way sensitivity check on any scenario's prior;
@@ -69,7 +69,7 @@ The quickest route is one table with one row per decision option × future scena
 
 **Rejected, with the reason shown:** .xls and other formats, formula cells without a saved result, Excel error cells, duplicate or blank headings, more values than headings, probabilities outside 0–1, probabilities that do not total 1, missing references between sheets, NaN or infinity, and fewer than two options or scenarios.
 
-**Limits.** Files up to 50 MB in total, the same as the upload cap. Inside a file Learn Signal reads at most 30 sheets, 10,000 rows and 80 columns per sheet and 250,000 cells in all. Those are method limits, not file-size limits: the exact model holds at most 30 scenarios, 12 options (360 payoffs) and 12 studies with up to 10 results each (3,600 result rows), so a longer table cannot be a decision table, and the limits stop a large unrelated workbook from tying up the session.
+**Data limits.** On your own computer there are none: any number of sheets, rows, cells, scenarios, options, studies and results, with the computer's memory as the limit (the upload cap is 10,000 MB). The calculations are exact and grow with options × scenarios × study results, never combinatorially, and running out of memory gives a plain message instead of a crash. The public demo (`SIGNAL_PUBLIC=1`) applies hard caps from `src/learnsignal/limits.py` (50 MB, 10,000 rows per sheet, 250,000 cells, 30 scenarios, 12 options, 12 studies with up to 10 results) and says when a demo limit is hit.
 
 See the [data guide](docs/data-guide.md).
 
@@ -145,7 +145,7 @@ docker build -t learnsignal .
 docker run --rm -p 8601:8601 learnsignal
 ```
 
-Then open http://127.0.0.1:8601. The container runs as a non-root user with the same 50 MB upload cap.
+Then open http://127.0.0.1:8601. The container runs as a non-root user with a 10,000 MB upload cap. Set `-e SIGNAL_PUBLIC=1` to apply the public demo caps on a shared server.
 
 ## Privacy
 
@@ -164,7 +164,7 @@ python -m ruff check .
 python -m build
 ```
 
-The decision core installs without Streamlit or Plotly; `pip install -e ".[ui]"` adds the app dependencies. Tests cover the hand-calculated demo and a textbook oil-drilling example (EVPI 142.5, EVSI 53), information-value bounds on random models, perfect and uninformative studies, impossible results, refusal of incoherent or incomplete inputs, Excel and CSV round trips, upload limits, review gating, every Streamlit page and input mode, and the Signal Hub contract (`learnsignal.ui.render`, namespaced keys, Hub mode, no repo-root file reads).
+The decision core installs without Streamlit or Plotly; `pip install -e ".[ui]"` adds the app dependencies. Tests cover the hand-calculated demo and a textbook oil-drilling example (EVPI 142.5, EVSI 53), information-value bounds on random models, perfect and uninformative studies, impossible results, refusal of incoherent or incomplete inputs, Excel and CSV round trips, models and files beyond the demo caps locally and the caps under `SIGNAL_PUBLIC=1`, a 1,000-scenario model, review gating, every Streamlit page and input mode, and the Signal Hub contract (`learnsignal.ui.render`, namespaced keys, Hub mode, no repo-root file reads).
 
 ## Where this fits in Signal
 
@@ -209,7 +209,7 @@ All 24 apps run side by side in [Signal Hub](https://github.com/UlrikErlingsen/s
 - Runge, M. C., Rushing, C. S., Lyons, J. E., & Rubenstein, M. A. (2023). A simplified method for value of information using constructed scales. *Decision Analysis, 20*(3), 220–230. https://doi.org/10.1287/deca.2023.0474
 - Yokota, F., & Thompson, K. M. (2004). Value of information literature analysis: A review of applications in health risk management. *Medical Decision Making, 24*(3), 287–298. https://doi.org/10.1177/0272989X04263157
 
-The sources describe the value-of-information idea, how to calculate it and how it is used. None of them validates the demo's numbers or the app's limits, and Learn Signal does not implement Runge et al.'s constructed-scale method or the simulation methods used for continuous models.
+The sources describe the value-of-information idea, how to calculate it and how it is used. None of them validates the demo's numbers or the demo caps, and Learn Signal does not implement Runge et al.'s constructed-scale method or the simulation methods used for continuous models.
 
 ## Originality and license
 

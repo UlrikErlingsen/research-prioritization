@@ -68,21 +68,24 @@ Each problem is reported with the sheet, row and column where possible, and the 
 - blank or duplicate headings, or rows with more values than headings;
 - probabilities outside 0 to 1, priors or result probabilities that do not total 1, TRUE/FALSE or text in number columns, NaN or infinity;
 - duplicate option × scenario rows, references to a missing scenario, option, study, question or source, duplicate reference codes;
-- more than 10 results for one study;
 - source links that are not public `http(s)` addresses (use a blank URL for internal material).
 
-## Limits
+## Data limits
 
-| Limit | Value | Why |
-|---|---|---|
-| Upload size | 50 MB in total | the upload cap set in `.streamlit/config.toml`, the launchers (`LEARNSIGNAL_MAX_UPLOAD_MB`) and the Dockerfile |
-| JSON file | 50 MB | same cap |
-| Workbook sheets | 30 | method limit |
-| Rows and columns per sheet | 10,000 and 80 | method limit |
-| Cells across all files | 250,000 | method limit |
-| Unpacked workbook size | 200 MB | guard against compressed-archive bombs |
-| Scenarios, options | 2–30, 2–12 | size of the exact model |
-| Studies, results per study | 12, 10 | size of the exact model |
-| Questions, sources | 20, 100 | size of the exact model |
+**On your own computer there are no built-in limits.** Learn Signal reads any number of sheets, rows, columns, cells, scenarios, options, studies and results; the computer's memory and processor are the limit. Every calculation is exact and grows with options × scenarios × study results, never combinatorially, so a model with a thousand scenarios still calculates in a couple of seconds. The upload cap is 10,000 MB, set in `.streamlit/config.toml`, by the launchers (`LEARNSIGNAL_MAX_UPLOAD_MB`) and in the Dockerfile. If a file is too big for the computer's memory, the app says so instead of crashing. Very long result tables show their first 50,000 rows on screen with a note; the ZIP export contains every row, as does the Excel workbook up to Excel's own 1,048,576 rows per sheet.
 
-The row and cell limits are method limits rather than file-size limits. The exact model holds at most 360 payoffs and 3,600 study-result rows, so a longer table cannot be a decision table; the limits stop a large unrelated workbook from tying up the session. Remove unrelated sheets and rows before uploading.
+**The public demo** (`SIGNAL_PUBLIC=1`, as on the public Signal Hub) protects a shared server with hard caps, all defined in `src/learnsignal/limits.py`. A capped message says it is a demo limit; the downloaded app has none.
+
+| Demo cap | Value |
+|---|---|
+| Upload size (spreadsheets in total, or one JSON file) | 50 MB |
+| Unpacked workbook size, files inside a workbook | 200 MB, 1,000 |
+| Workbook sheets | 30 |
+| Rows and columns per sheet | 10,000 and 80 |
+| Cells across all files | 250,000 |
+| Pasted AI reply, notes pasted into the AI prompt | 1,000,000 and 35,000 characters |
+| Scenarios, options, payoffs | 30, 12, 360 |
+| Studies, results per study, study-result rows | 12, 10, 3,600 |
+| Questions, answers, sources | 20, 600, 100 |
+
+Text fields keep fixed lengths everywhere because they are labels, not data: for example 150 characters for a scenario or option name, 2,500 for the case brief and 1,000 for a note. The JSON schema in the AI prompt lists each one. Payoffs and costs must lie within ±10¹² of the chosen unit.

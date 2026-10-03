@@ -81,6 +81,10 @@ The fictional demo (NOK contribution over 12 months; prior 0.4 for higher demand
 
 The test suite also checks a classic textbook oil-drilling decision worked by hand: prior 0.25 for oil, drill pays 700 or −100, selling pays 90, and a survey costing 30 reads favourable with probability 0.6 if oil and 0.2 if dry. EVPI is 142.5, EVSI 53 and the survey's net value 23.
 
+## Size and speed
+
+There is no size limit outside the public demo. Each calculation is a matrix product: EVPI costs options × scenarios operations, each study adds results × options × scenarios, each question options × scenarios, and the sensitivity check 41 × options × scenarios. Nothing enumerates combinations, so the work grows in proportion to the table; the test suite runs a 1,000-scenario, 20-option model with five studies in well under a minute. Checking the inputs against the schema is the slowest step for very large tables.
+
 ## Assumptions and limits
 
 - Risk-neutral expected value. With money payoffs, a risk-averse decision maker may value information differently; to reflect risk attitude, enter utilities as payoffs and express study costs in the same utility units.

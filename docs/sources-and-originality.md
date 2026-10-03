@@ -17,7 +17,7 @@ The first three sources ship inside the app (**Research & limits**), in the prin
 - **Runge et al. (2023)** propose a simplified value-of-information method based on constructed scales, to help frame research early. Learn Signal shares that early-framing purpose but does **not** implement constructed scales: it requires explicit numeric payoffs and study accuracies, and its AI prompt forbids replacing unknown numbers with 1–5 ratings.
 - **Keisler et al. (2014)** and **Yokota and Thompson (2004)** review published value-of-information applications across fields and in health risk management. They are background on how the method is used, not validation of this app.
 
-No source validates the demo's numbers, the size limits (30 scenarios, 12 options, 12 studies, 10 results per study), the 0.025 sensitivity grid or the review gate. Those are transparent design choices.
+No source validates the demo's numbers, the public demo caps in `limits.py`, the 0.025 sensitivity grid or the review gate. Those are transparent design choices.
 
 ## Primary references
 

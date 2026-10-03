@@ -39,11 +39,11 @@ Explain that this protocol does not fit, and suggest a different approach, if th
 **Ask for and confirm:**
 
 - the decision and one payoff unit and time horizon (for example "NOK contribution over 12 months"); higher must be better;
-- 2–12 options, including a feasible fallback such as "hold";
-- 2–30 scenarios that are mutually exclusive and together exhaustive; combine correlated uncertainties into joint scenarios;
+- two or more options, including a feasible fallback such as "hold";
+- two or more scenarios that are mutually exclusive and together exhaustive; combine correlated uncertainties into joint scenarios;
 - a prior probability for each scenario, summing to exactly 1, and where it comes from;
 - a net payoff for every option in every scenario, including the option's own costs and excluding research costs;
-- for each candidate study (up to 12): its cost in the same unit, its possible results (at most 10), and P(result | scenario) for every result and scenario, summing to 1 within each scenario, with the evidence behind those accuracies;
+- for each candidate study: its cost in the same unit, its possible results, and P(result | scenario) for every result and scenario, summing to 1 within each scenario, with the evidence behind those accuracies;
 - optionally, questions that a perfect answer would resolve, with the answer each scenario implies.
 
 Restate the model as tables (priors; option × scenario payoffs; study × scenario × result probabilities) and ask the user to confirm it before calculating. Mark every input as supplied, estimated or assumed.
