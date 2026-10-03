@@ -27,7 +27,8 @@ TITLES = {"context": "One common payoff unit and horizon · higher payoff is bet
           "signals": "Study likelihoods · P(result | true state), not P(state | result)",
           "questions": "Uncertainties we could learn perfectly", "partitions": "The answer to each uncertainty in every state",
           "sources": "Evidence or justification for inputs"}
-REFERENCES = [("Canessa et al. (2015). When do we need more data? A primer on calculating the value of information for applied ecologists.",
+REFERENCES = [("Howard (1966). Information value theory.", "https://doi.org/10.1109/TSSC.1966.300074"),
+              ("Canessa et al. (2015). When do we need more data? A primer on calculating the value of information for applied ecologists.",
                "https://doi.org/10.1111/2041-210X.12423"),
               ("Runge et al. (2023). A Simplified Method for Value of Information Using Constructed Scales.",
                "https://doi.org/10.1287/deca.2023.0474")]

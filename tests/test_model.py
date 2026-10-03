@@ -122,3 +122,51 @@ def test_export_unreviewed_draft_does_not_include_calculated_values():
     assert "17600" not in m.printable(p)
     assert "Review the draft" in m.printable(p)
     assert io.restore(io.json_bytes(p),"learn",m.validate)==p
+
+
+def test_textbook_oil_drilling_example_evpi_and_evsi():
+    """The classic oil-drilling decision used to teach decision analysis (as in Hillier and Lieberman's
+    decision-analysis chapter of Introduction to Operations Research), worked by hand below.
+
+    Land may hold oil (prior 0.25) or be dry (0.75). Drilling pays 700 if oil and -100 if dry; selling the land pays
+    90 either way (thousands of dollars). A seismic survey costing 30 reads favourable with probability 0.6 if oil
+    and 0.2 if dry.
+
+    Without information: drill = 0.25*700 + 0.75*(-100) = 100 > sell = 90, so drill, worth 100.
+    Perfect information: 0.25*700 + 0.75*90 = 242.5, so EVPI = 142.5.
+    Survey: P(favourable) = 0.25*0.6 + 0.75*0.2 = 0.3, P(oil | favourable) = 0.15/0.3 = 0.5, drill is worth
+    0.5*700 - 0.5*100 = 300. P(oil | unfavourable) = 0.1/0.7 = 1/7, drill is worth 100 - 600/7 = 14.29 < 90, so sell.
+    With the survey: 0.3*300 + 0.7*90 = 153, so EVSI = 53 and the net value after its cost of 30 is 23.
+    """
+    d = m.starter("Textbook oil-drilling decision")
+    d["context"] = [{"unit": "thousand USD", "horizon": "One drilling decision"}]
+    d["states"] = [{"id": "OIL", "label": "Oil", "probability": .25, "note": "", "source_id": None},
+                   {"id": "DRY", "label": "Dry", "probability": .75, "note": "", "source_id": None}]
+    d["actions"] = [{"id": "DRILL", "label": "Drill"}, {"id": "SELL", "label": "Sell the land"}]
+    values = {("DRILL", "OIL"): 700, ("DRILL", "DRY"): -100, ("SELL", "OIL"): 90, ("SELL", "DRY"): 90}
+    d["payoffs"] = [{"action_id": a, "state_id": s, "value": v, "note": "", "source_id": None} for (a, s), v in values.items()]
+    d["studies"] = [{"id": "SURVEY", "label": "Seismic survey", "cost": 30, "description": "Detailed seismic survey",
+                     "source_id": None}]
+    likelihood = {"OIL": .6, "DRY": .2}
+    d["signals"] = [{"study_id": "SURVEY", "state_id": s, "outcome": outcome, "probability": p if outcome == "favourable" else 1 - p}
+                    for s, p in likelihood.items() for outcome in ["favourable", "unfavourable"]]
+    d["questions"] = [{"id": "Q", "label": "Is there oil?"}]
+    d["partitions"] = [{"question_id": "Q", "state_id": s, "answer": s} for s in ["OIL", "DRY"]]
+    r = m.analyze(m.validate(d))
+    assert r["preferred"] == "Drill"
+    assert r["current_value"] == pytest.approx(100)
+    assert r["perfect_value"] == pytest.approx(242.5)
+    assert r["evpi"] == pytest.approx(142.5)
+    assert r["questions"].iloc[0].perfect_answer_value == pytest.approx(142.5)
+    study = r["studies"].iloc[0]
+    assert study.evsi == pytest.approx(53)
+    assert study.net_value == pytest.approx(23)
+    policies = r["policies"].set_index("result")
+    assert policies.loc["favourable", "result_probability"] == pytest.approx(.3)
+    assert policies.loc["favourable", "preferred_action"] == "Drill"
+    assert policies.loc["favourable", "conditional_payoff"] == pytest.approx(300)
+    assert policies.loc["unfavourable", "preferred_action"] == "Sell the land"
+    assert policies.loc["unfavourable", "conditional_payoff"] == pytest.approx(90)
+    post = r["posteriors"].set_index(["result", "state"]).posterior_probability
+    assert post[("favourable", "Oil")] == pytest.approx(.5)
+    assert post[("unfavourable", "Oil")] == pytest.approx(1 / 7)
